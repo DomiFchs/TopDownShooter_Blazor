@@ -1,0 +1,32 @@
+@inject NavigationManager NavigationManager
+
+<MudDialog>
+    <DialogContent>
+        The winner is @Winner.UserName
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Primary" OnClick="Submit">Back to Menu</MudButton>
+    </DialogActions>
+</MudDialog>
+@code {
+
+    [CascadingParameter]
+    MudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter]
+    public HubConnection Owner { get; set; } = null!;
+
+    [Parameter]
+    public Player Winner { get; set; } = null!;
+
+    [Parameter]
+    public Task OnLeave { get; set; } = null!;
+
+    private async Task Submit() {
+        MudDialog.Close(DialogResult.Ok(true));
+        await Owner.StopAsync();
+        await Owner.DisposeAsync();
+        await OnLeave;
+        NavigationManager.NavigateTo("/mainmenu");
+    }
+}

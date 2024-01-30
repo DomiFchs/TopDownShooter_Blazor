@@ -1,0 +1,33 @@
+<!-- Matchmaking.razor -->
+@page "/matchmaking"
+@using Microsoft.AspNetCore.SignalR
+@using Microsoft.AspNetCore.SignalR.Client
+@using TopDownShooter.Web.Services
+@inject IHubContext<MatchmakingHub> MatchmakingHubContext
+@inject NavigationManager NavigationManager
+
+<h3>Matchmaking</h3>
+
+<button @onclick="StartMatchmaking">Start Matchmaking</button>
+
+@code {
+    private HubConnection? hubConnection;
+
+    private async Task StartMatchmaking()
+    {
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(NavigationManager.ToAbsoluteUri("/matchmakingHub"))
+            .Build();
+
+        hubConnection.On("MatchFound", async () =>
+        {
+            // Handle match found event, e.g., navigate to play page
+            NavigationManager.NavigateTo("/play");
+
+            // Clean up the hub connection
+            await hubConnection.StopAsync();
+        });
+
+        await hubConnection.StartAsync();
+    }
+}

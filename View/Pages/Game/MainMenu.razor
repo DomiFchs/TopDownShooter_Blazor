@@ -1,0 +1,23 @@
+@page "/mainmenu"
+@inject ConnectionProvider ConnectionProvider
+@inject NavigationManager NavigationManager
+
+<MudText Align="Align.Center">Topdown Shooter</MudText>
+<MudTextField @bind-Value="UserName" Label="Username" Disabled="_connecting"/>
+<MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Matchmaking">@(_connecting ? "Loading..." : "Play")</MudButton>
+
+@code {
+
+    private bool _connecting;
+    private string UserName { get; set; } = null!;
+    
+    private async Task Matchmaking() {
+         _connecting = true;
+         ConnectionProvider.OnGameJoined += OnGameJoined;
+         await ConnectionProvider.StartMatchmaking(UserName);
+    }
+
+    private void OnGameJoined() {
+        NavigationManager.NavigateTo("/game");
+    }
+}

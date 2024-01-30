@@ -1,0 +1,226 @@
+@page "/game"
+@using View.Shared
+
+@inject ConnectionProvider ConnectionProvider
+@inject IDialogService DialogService
+
+<div class="d-flex justify-content-center">
+    <MudText>@ConnectionProvider.LocalPlayer.UserName (You)</MudText>
+    <MudText>@Enemy?.UserName</MudText>
+</div>
+
+<MudButton Disabled="_pressedReady" Color="Color.Primary" Variant="Variant.Filled" OnClick="SetReady">Ready</MudButton>
+
+
+
+@if (_gameStarted) {
+        
+    <MudAlert Severity="@(_focussed ? Severity.Info : Severity.Warning)">@(_focussed ? "Press WASD to Move and Enter to shoot!" : "Focus the Canvas to Play!")</MudAlert>
+    <div @onfocusin="() => SetFocus(true)" @onfocusout="() => SetFocus(false)" tabindex="0" @onkeydown="OnKeyDown" @onkeyup="OnKeyUp" @onkeypress="OnKeyPress">
+        <BECanvas Width="@Width" Height="@Height" @ref="_canvasReference"></BECanvas>
+    </div>
+}
+else {
+    <MudText>Waiting for other player to go Ready...</MudText>
+}
+
+@code {
+
+    private Canvas2DContext? _canvasContext;
+    private BECanvasComponent _canvasReference = null!;
+
+    private Player Enemy { get; set; } = null!;
+    private Player LocalPlayer { get; set; } = null!;
+    private List<Projectile> Projectiles { get; set; } = new();
+
+    private bool _pressedReady;
+    private bool _focussed;
+    private bool _gameStarted;
+    
+    private KeyMask _keyMask;
+    private KeyMask _lastKeyMask;
+    
+    private const int Width = 800;
+    private const int Height = 800;
+    private const int PlayerSize = 30;
+
+    private CancellationTokenSource Cts { get; set; } = new();
+
+    private Task _gameLoop;
+    
+    protected override async Task OnInitializedAsync() {
+        await ConnectionProvider.HubConnection.SendAsync("RequestGameData");
+        ConnectionProvider.HubConnection.On<Player>("GetEnemy", (enemy) => {
+            Enemy = enemy;
+            InvokeAsync(StateHasChanged);
+        });
+        
+        ConnectionProvider.HubConnection.On<Player>("GetLocalPlayer", (player) => {
+            LocalPlayer = player;
+            InvokeAsync(StateHasChanged);
+        });
+        
+
+        ConnectionProvider.HubConnection.On("StartGame", async () => {
+            _gameStarted = true;
+            _gameLoop = Task.Run(async () => await GameLoop(Cts.Token));
+            await InvokeAsync(StateHasChanged);
+            await RenderCanvasAsync();
+        });
+        
+        ConnectionProvider.HubConnection.On<Player>("UpdatePlayer", async (player) => {
+            if (player.ConnectionId == LocalPlayer!.ConnectionId) {
+                LocalPlayer.X = player.X;
+                LocalPlayer.Y = player.Y;
+            }
+            else {
+                Enemy.X = player.X;
+                Enemy.Y = player.Y;
+            }
+            await RenderCanvasAsync();
+        });
+        
+        ConnectionProvider.HubConnection.On<List<Projectile>>("UpdateProjectiles", async (projectiles) => {
+            Projectiles = projectiles;
+            await RenderCanvasAsync();
+        });
+        
+        ConnectionProvider.HubConnection.On<Player>("GameOver", async (player) => {
+            var parameters = new DialogParameters<GameOverDialog> {
+                { "Winner", player },
+                { "Owner", ConnectionProvider.HubConnection },
+                { "OnLeave", ConnectionProvider.HubConnection.SendAsync("Disconnect", LocalPlayer.GroupId, LocalPlayer.ConnectionId) }
+            };
+            await DialogService.ShowAsync<GameOverDialog>("Game Ended!", parameters , new DialogOptions() { MaxWidth = MaxWidth.Large, CloseOnEscapeKey = false, DisableBackdropClick = true});
+            await Cts.CancelAsync();
+            _gameLoop.Dispose();
+        });
+        
+    }
+
+    private async Task GameLoop(CancellationToken ct) {
+        while (!ct.IsCancellationRequested) {
+            await ConnectionProvider.HubConnection.SendAsync("UpdatePlayers", LocalPlayer!.GroupId, ct);
+            await Task.Delay(10, ct);
+        }
+    }
+
+    private async Task RenderCanvasAsync() {
+        _canvasContext = await _canvasReference.CreateCanvas2DAsync();
+        await _canvasContext.SetFillStyleAsync("green");
+        await _canvasContext.FillRectAsync(0, 0, Width, Height);
+        
+        await _canvasContext.SetFillStyleAsync("black");
+        
+        if(!LocalPlayer.IsDead)
+            await _canvasContext.FillRectAsync(LocalPlayer.X, LocalPlayer.Y, PlayerSize, PlayerSize);
+        
+        if(!Enemy.IsDead)
+        await _canvasContext.FillRectAsync(Enemy.X, Enemy.Y, PlayerSize, PlayerSize);
+        
+        foreach (var projectile in Projectiles) {
+            await _canvasContext.FillRectAsync(projectile.X, projectile.Y, projectile.Size, projectile.Size);
+        }
+        
+    }
+    
+    private async Task RenderWeaponAsync(int x, int y, int playerSize, KeyMask lastDirection) {
+        // Determine the position and rotation of the weapon based on lastDirection
+        double weaponX = x;
+        double weaponY = y;
+
+        switch (lastDirection) {
+            case KeyMask.Up:
+                weaponY -= playerSize;
+                break;
+            case KeyMask.Left:
+                weaponX -= playerSize;
+                break;
+            case KeyMask.Down:
+                weaponY += playerSize;
+                break;
+            case KeyMask.Right:
+                weaponX += playerSize;
+                break;
+            // Handle other directions as needed
+        }
+
+        // Draw the weapon (replace this with your actual drawing code)
+        await _canvasContext.SetFillStyleAsync("gray");
+        await _canvasContext.FillRectAsync(weaponX, weaponY, 10, 30); // Adjust dimensions as needed
+    }
+    
+    private async Task SetReady() {
+        _pressedReady = true;
+        await ConnectionProvider.HubConnection.SendAsync("SetReady",true, LocalPlayer.GroupId);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void SetFocus(bool focus) {
+        _focussed = focus;
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e) {
+        if (!_gameStarted) return;
+
+        switch (e.Key) {
+            case "a" or "A":
+                _keyMask |= KeyMask.Left;
+                break;
+            case "d" or "D":
+                _keyMask |= KeyMask.Right;
+                break;
+            case "w" or "W":
+                _keyMask |= KeyMask.Up;
+                break;
+            case "s" or "S":
+                _keyMask |= KeyMask.Down;
+                break;
+            case "Shift":
+                _keyMask |= KeyMask.Sprint;
+                break;
+            default: return;
+        }
+        
+        if (_keyMask == _lastKeyMask) return;
+        _lastKeyMask = _keyMask;
+        await ConnectionProvider.HubConnection.SendAsync("UpdateFlag", LocalPlayer!.GroupId, LocalPlayer.ConnectionId, _keyMask);
+    }
+    
+    private async Task OnKeyUp(KeyboardEventArgs e) {
+        if (!_gameStarted) return;
+
+        switch (e.Key) {
+            case "a" or "A":
+                _keyMask &= ~KeyMask.Left;
+                break;
+            case "d" or "D":
+                _keyMask &= ~KeyMask.Right;
+                break;
+            case "w" or "W":
+                _keyMask &= ~KeyMask.Up;
+                break;
+            case "s" or "S":
+                _keyMask &= ~KeyMask.Down;
+                break;
+            case "Shift":
+                _keyMask &= ~KeyMask.Sprint;
+                break;
+            default: return;
+        }
+        await ConnectionProvider.HubConnection.SendAsync("UpdateFlag", LocalPlayer!.GroupId, LocalPlayer.ConnectionId, _keyMask);
+    }
+
+    private async Task OnKeyPress(KeyboardEventArgs e) {
+        if (!_gameStarted) return;
+        
+        switch (e.Key) {
+            case "Enter":
+                await ConnectionProvider.HubConnection.SendAsync("Shoot", LocalPlayer!.GroupId, LocalPlayer.ConnectionId);
+                break;
+            default: return;
+        }
+    }
+
+
+}
