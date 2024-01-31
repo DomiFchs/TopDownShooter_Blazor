@@ -6,7 +6,5 @@ public enum KeyMask {
     Up = 1,
     Left = 2,
     Down = 4,
-    Right = 8,
-    Shoot = 16,
-    Sprint = 32
+    Right = 8
 }

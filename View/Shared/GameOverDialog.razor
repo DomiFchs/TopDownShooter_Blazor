@@ -12,10 +12,7 @@
 
     [CascadingParameter]
     MudDialogInstance MudDialog { get; set; } = null!;
-
-    [Parameter]
-    public HubConnection Owner { get; set; } = null!;
-
+    
     [Parameter]
     public Player Winner { get; set; } = null!;
 
@@ -24,8 +21,6 @@
 
     private async Task Submit() {
         MudDialog.Close(DialogResult.Ok(true));
-        await Owner.StopAsync();
-        await Owner.DisposeAsync();
         await OnLeave;
         NavigationManager.NavigateTo("/mainmenu");
     }

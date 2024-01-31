@@ -1,10 +1,13 @@
 @page "/mainmenu"
-@inject ConnectionProvider ConnectionProvider
+@inject GameConnectionProvider GameConnectionProvider
 @inject NavigationManager NavigationManager
 
-<MudText Align="Align.Center">Topdown Shooter</MudText>
+<MudText Class="m-2" Typo="Typo.h4" Align="Align.Center">Topdown Shooter</MudText>
 <MudTextField @bind-Value="UserName" Label="Username" Disabled="_connecting"/>
-<MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Matchmaking">@(_connecting ? "Loading..." : "Play")</MudButton>
+<MudButton Disabled="_connecting" Variant="Variant.Filled" Color="Color.Primary" OnClick="Matchmaking">@(_connecting ? "Loading..." : "Play")</MudButton>
+<div class="d-flex">
+    
+</div>
 
 @code {
 
@@ -13,8 +16,8 @@
     
     private async Task Matchmaking() {
          _connecting = true;
-         ConnectionProvider.OnGameJoined += OnGameJoined;
-         await ConnectionProvider.StartMatchmaking(UserName);
+         GameConnectionProvider.OnGameJoined += OnGameJoined;
+         await GameConnectionProvider.StartMatchmakingAsync(UserName);
     }
 
     private void OnGameJoined() {

@@ -9,38 +9,36 @@ namespace TopDownShooter.ApiService.Services;
 
 public class GameHub : Hub{
     
-    private const int Width = 800;
-    private const int Height = 800;
-    private const int PlayerSize = 30;
-    private const int Speed = 3;
-    private const int SprintSpeed = 6;
-    
-    private const int P1StartX = 100;
-    private const int P1StartY = 100;
-    
-    private const int P2StartX = 700;
-    private const int P2StartY = 700;
     
     private static readonly Dictionary<string, SessionData> PlayGroups = new();
     
     public async Task JoinGame(string groupId, string userName) {
         Console.WriteLine($"Player {userName} trying to join game {groupId}!");
         var player = new Player { UserName = userName, ConnectionId = Context.ConnectionId, GroupId = groupId, Connected = true};
+        Console.WriteLine($"Player created! Adding to group {groupId}!");
         await Groups.AddToGroupAsync(Context.ConnectionId, groupId);
         
         if (!PlayGroups.TryGetValue(groupId, out var value)) {
-            player.X = P1StartX;
-            player.Y = P1StartY;
-            PlayGroups.Add(groupId, new SessionData(){Player1 = player});
-            Console.WriteLine("Game created!");
+            var sessionData = new SessionData() { Player1 = player, GameSettings = new GameSettings() };
+            player.CurrentHealth = sessionData.GameSettings.MaxPlayerHealth;
+            player.CurrentStamina = sessionData.GameSettings.MaxPlayerStamina;
+            
+            player.X = sessionData.GameSettings.P1StartX;
+            player.Y = sessionData.GameSettings.P1StartY;
+            
+            PlayGroups.Add(groupId, sessionData);
             
         } else {
-            if (value?.Player2 == null) {
-                value!.Player2  = player;
-                player.X = P2StartX;
-                player.Y = P2StartY;
-                await Clients.Group(groupId).SendAsync("GameJoined");
-                Console.WriteLine("Game joined!");
+            if (value.Player2 == null) {
+                value.Player2  = player;
+                
+                player.CurrentHealth = value.GameSettings.MaxPlayerHealth;
+                player.CurrentStamina = value.GameSettings.MaxPlayerStamina;
+                
+                player.X = value.GameSettings.P2StartX;
+                player.Y = value.GameSettings.P2StartY;
+                
+                await Clients.Group(groupId).SendAsync("GameJoined", value.GameSettings);
             }
         }
     }
@@ -51,16 +49,16 @@ public class GameHub : Hub{
         
         var players = PlayGroups[groupId];
         if (players.Player1!.ConnectionId == Context.ConnectionId) {
-            await Clients.Caller.SendAsync("GetLocalPlayer", players.Player1);
-            await Clients.Caller.SendAsync("GetEnemy", players.Player2);
-        } else {
-            await Clients.Caller.SendAsync("GetLocalPlayer", players.Player2);
-            await Clients.Caller.SendAsync("GetEnemy", players.Player1);
+            await Clients.Caller.SendAsync("PlayersInitialized", players.Player1, players.Player2);
+            return;
         }
+
+        await Clients.Caller.SendAsync("PlayersInitialized", players.Player2, players.Player1);
     }
     
-    public async Task SetReady(bool ready, string groupId) {
+    public async Task ChangeReadyState(bool ready, string groupId) {
         Console.WriteLine("Player is ready!");
+        Console.WriteLine(groupId);
         var players = PlayGroups[groupId];
         if (players.Player1!.ConnectionId == Context.ConnectionId) {
             players.Player1.Ready = ready;
@@ -69,6 +67,7 @@ public class GameHub : Hub{
         }
         
         if (players.Player1.Ready && players.Player2!.Ready) {
+            Console.WriteLine("Game starting!");
             await Clients.Group(groupId).SendAsync("StartGame");
             
         }
@@ -82,18 +81,33 @@ public class GameHub : Hub{
         MovePlayer(players.Player2);
         await MoveProjectiles(players.Player1, groupId);
         await MoveProjectiles(players.Player2, groupId);
-
-        await Clients.Group(groupId).SendAsync("UpdatePlayer", players.Player1);
-        await Clients.Group(groupId).SendAsync("UpdatePlayer", players.Player2);
+        
         var allProjectiles = new List<Projectile>();
-        allProjectiles.AddRange(players.Player1.Projectiles);
+        allProjectiles.AddRange(players.Player1.Projectiles); //TODO: anders vllt in der GameSession
         allProjectiles.AddRange(players.Player2!.Projectiles);
-        await Clients.Group(groupId).SendAsync("UpdateProjectiles", allProjectiles);
+        
+        
+        if(players.Player1.ConnectionId == Context.ConnectionId) {
+            await Clients.Group(groupId).SendAsync("UpdateGameData", players.Player1, players.Player2, allProjectiles);
+        }
+        else {
+            await Clients.Group(groupId).SendAsync("UpdateGameData", players.Player2, players.Player1, allProjectiles);
+        }
+        
     }
     
-    public void UpdateFlag(string groupId, string connectionId, KeyMask keyFlag) {
+    public void UpdateSprintState(string groupId, bool isSprinting) {
         var players = PlayGroups[groupId];
-        if (players.Player1!.ConnectionId == connectionId) {
+        if (players.Player1!.ConnectionId == Context.ConnectionId) {
+            players.Player1.IsSprinting = isSprinting;
+        } else {
+            players.Player2!.IsSprinting = isSprinting;
+        }
+    }
+    
+    public void UpdatePlayerInput(string groupId, KeyMask keyFlag) {
+        var players = PlayGroups[groupId];
+        if (players.Player1!.ConnectionId == Context.ConnectionId) {
             players.Player1.KeyMask = keyFlag;
         } else {
             players.Player2!.KeyMask = keyFlag;
@@ -103,12 +117,16 @@ public class GameHub : Hub{
     private void MovePlayer(Player? player) {
         if (player == null) return;
         
-        var otherPlayer = player == PlayGroups[player.GroupId!].Player1 ? PlayGroups[player.GroupId!].Player2 : PlayGroups[player.GroupId!].Player1;
+        
+        var gameSession = PlayGroups[player.GroupId!];
+        var gameSettings = gameSession.GameSettings;
+        
+        var otherPlayer = player == gameSession.Player1 ? gameSession.Player2 : gameSession.Player1;
         
         player.PreviousX = player.X;
         player.PreviousY = player.Y;
         
-        var currentSpeed = player.KeyMask.HasFlag(KeyMask.Sprint) ? SprintSpeed : Speed;
+        var currentSpeed = player.IsSprinting ? gameSettings.PlayerSprintSpeed : gameSettings.PlayerSpeed;
         if (player.KeyMask.HasFlag(KeyMask.Up)) {
             player.Y -= currentSpeed;
         }
@@ -128,16 +146,16 @@ public class GameHub : Hub{
         if (player.X < 0) {
             player.X = 0;
         }
-        if (player.X > Width - PlayerSize) {
-            player.X = Width - PlayerSize;
+        if (player.X > gameSettings.FieldWidth - gameSettings.PlayerWidth) {
+            player.X = gameSettings.FieldWidth - gameSettings.PlayerWidth;
         }
         
         if (player.Y < 0) {
             player.Y = 0;
         }
         
-        if (player.Y > Height - PlayerSize) {
-            player.Y = Height - PlayerSize;
+        if (player.Y > gameSettings.FieldHeight - gameSettings.PlayerHeight) {
+            player.Y = gameSettings.FieldHeight - gameSettings.PlayerHeight;
         }
     }
 
@@ -153,21 +171,27 @@ public class GameHub : Hub{
     }
 
     private bool IsColliding(Player player1, Player player2) {
-        return (player1.X < player2.X + PlayerSize &&
-                player1.X + PlayerSize > player2.X &&
-                player1.Y < player2.Y + PlayerSize &&
-                player1.Y + PlayerSize > player2.Y);
+        var gameSettings = PlayGroups[player1.GroupId!].GameSettings;
+        
+        return (player1.X < player2.X + gameSettings.PlayerWidth &&
+                player1.X + gameSettings.PlayerWidth > player2.X &&
+                player1.Y < player2.Y + gameSettings.PlayerHeight &&
+                player1.Y + gameSettings.PlayerHeight > player2.Y);
     }
     
     private bool IsColliding(Player player, Projectile projectile)
     {
+        if (player.ConnectionId == projectile.OwnerConnectionId) return false;
+        var gameSettings = PlayGroups[player.GroupId!].GameSettings;
         return (player.X < projectile.X + projectile.Size &&
-                player.X + PlayerSize > projectile.X &&
+                player.X + gameSettings.PlayerWidth > projectile.X &&
                 player.Y < projectile.Y + projectile.Size &&
-                player.Y + PlayerSize > projectile.Y);
+                player.Y + gameSettings.PlayerHeight > projectile.Y);
     }
     
     private async Task MoveProjectiles(Player player, string groupId) {
+        var gameSettings = PlayGroups[groupId].GameSettings;
+        
         foreach (var projectile in player.Projectiles) {
             if (projectile.Direction.HasFlag(KeyMask.Up)) {
                 projectile.Y -= projectile.Speed;
@@ -185,7 +209,7 @@ public class GameHub : Hub{
         
         var projectilesToRemove = new List<Projectile>();
         foreach (var projectile in player.Projectiles) {
-            if (projectile.X < 0 || projectile.X > Width || projectile.Y < 0 || projectile.Y > Height) {
+            if (projectile.X < 0 || projectile.X > gameSettings.FieldWidth || projectile.Y < 0 || projectile.Y > gameSettings.FieldHeight) {
                 projectilesToRemove.Add(projectile);
             }
         }
@@ -199,16 +223,21 @@ public class GameHub : Hub{
         await CheckProjectileCollisions(groupId, gameSession.Player2, player.Projectiles);
     }
     
-    private async Task CheckProjectileCollisions(string groupId, Player player, List<Projectile> projectiles)
+    private async Task CheckProjectileCollisions(string groupId, Player? player, List<Projectile> projectiles)
     {
+        if (player == null) return;
+        
         var projectilesToRemove = new List<Projectile>();
 
         foreach (var projectile in projectiles) {
             if (!IsColliding(player, projectile)) continue;
-            player.IsDead = true;
-            await GameOver(groupId);
-
+            player.GetDamage(projectile.Damage);
             projectilesToRemove.Add(projectile);
+
+
+            if (player.IsDead) {
+                await GameOver(groupId);
+            }
         }
 
         foreach (var projectileToRemove in projectilesToRemove)
@@ -217,34 +246,35 @@ public class GameHub : Hub{
         }
     }
     
-    public async Task Shoot(string groupId, string connectionId) {
-        var players = PlayGroups[groupId];
-
+    public async Task Shoot(string groupId) {
+        var session = PlayGroups[groupId];
+        var gameSettings = session.GameSettings;
+        var projectileSize = new Projectile().Size; //Todo: anders vllt in der GameSession
         Player shootingPlayer;
-        if (players.Player1!.ConnectionId == connectionId) {
-            shootingPlayer = players.Player1;
+        if (session.Player1!.ConnectionId == Context.ConnectionId) {
+            shootingPlayer = session.Player1;
         } else {
-            shootingPlayer = players.Player2!;
+            shootingPlayer = session.Player2!;
         }
 
         var additionalXPos = 0f;
         if (shootingPlayer.LastDirection.HasFlag(KeyMask.Left)) {
-            additionalXPos = -PlayerSize / 2;
+            additionalXPos = -gameSettings.PlayerWidth / 2;
         } else if (shootingPlayer.LastDirection.HasFlag(KeyMask.Right)) {
-            additionalXPos = PlayerSize + PlayerSize / 2;
+            additionalXPos = gameSettings.PlayerWidth + gameSettings.PlayerWidth / 2;
         }
         else {
-            additionalXPos = PlayerSize / 2;
+            additionalXPos = projectileSize / 2;
         }
         
         var additionalYPos = 0f;
         if (shootingPlayer.LastDirection.HasFlag(KeyMask.Up)) {
-            additionalYPos = -PlayerSize / 2;
+            additionalYPos = -gameSettings.PlayerHeight / 2;
         } else if (shootingPlayer.LastDirection.HasFlag(KeyMask.Down)) {
-            additionalYPos = PlayerSize + PlayerSize / 2;
+            additionalYPos = gameSettings.PlayerHeight + gameSettings.PlayerHeight / 2;
         }
         else {
-            additionalYPos = PlayerSize / 2;
+            additionalYPos = projectileSize/2;
         }
 
         // Calculate the initial position of the projectile based on player size and direction
@@ -275,9 +305,9 @@ public class GameHub : Hub{
         await Clients.Group(groupId).SendAsync("GameOver", winner);
     }
     
-    public async Task Disconnect(string groupId, string connectionId) {
+    public async Task Disconnect(string groupId) {
         var session = PlayGroups[groupId];
-        if (session.Player1!.ConnectionId == connectionId) {
+        if (session.Player1!.ConnectionId == Context.ConnectionId) {
             session.Player1.Connected = false;
         } else {
             session.Player2!.Connected = false;
