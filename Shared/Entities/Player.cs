@@ -5,6 +5,8 @@ public class Player {
     public string ConnectionId { get; set; } = null!;
     public float CurrentHealth { get; set; }
     public float CurrentStamina { get; set; }
+    public float TicksLeftUntilStaminaRegen { get; set; } = 200;
+    public bool AllowedToStaminaRegen { get; set; }
     public bool Connected { get; set; }
     public bool Ready { get; set; }
     public bool IsSprinting { get; set; }
@@ -17,6 +19,7 @@ public class Player {
     public KeyMask LastDirection { get; set; }
     public List<Projectile> Projectiles { get; set; } = new();
     public bool IsDead { get; set; }
+    
     
     public void GetDamage(float damage) {
         CurrentHealth -= damage;

@@ -76,31 +76,78 @@ public class GameHub : Hub{
     
     public async Task UpdatePlayers(string groupId)
     {
-        var players = PlayGroups[groupId];
-        MovePlayer(players.Player1);
-        MovePlayer(players.Player2);
-        await MoveProjectiles(players.Player1, groupId);
-        await MoveProjectiles(players.Player2, groupId);
+        var sessionData = PlayGroups[groupId];
+        MovePlayer(sessionData.Player1);
+        MovePlayer(sessionData.Player2);
+        await MoveProjectiles(sessionData.Player1, groupId);
+        await MoveProjectiles(sessionData.Player2, groupId);
         
         var allProjectiles = new List<Projectile>();
-        allProjectiles.AddRange(players.Player1.Projectiles); //TODO: anders vllt in der GameSession
-        allProjectiles.AddRange(players.Player2!.Projectiles);
+        allProjectiles.AddRange(sessionData.Player1.Projectiles);
+        allProjectiles.AddRange(sessionData.Player2!.Projectiles);
         
+        UpdatePlayerStamina(sessionData);
         
-        if(players.Player1.ConnectionId == Context.ConnectionId) {
-            await Clients.Group(groupId).SendAsync("UpdateGameData", players.Player1, players.Player2, allProjectiles);
+        if(sessionData.Player1.ConnectionId == Context.ConnectionId) {
+            await Clients.Group(groupId).SendAsync("UpdateGameData", sessionData.Player1, sessionData.Player2, allProjectiles);
         }
         else {
-            await Clients.Group(groupId).SendAsync("UpdateGameData", players.Player2, players.Player1, allProjectiles);
+            await Clients.Group(groupId).SendAsync("UpdateGameData", sessionData.Player2, sessionData.Player1, allProjectiles);
         }
         
+    }
+
+    private void UpdatePlayerStamina(SessionData sessionData) {
+
+        foreach (var player in new[]{sessionData.Player1, sessionData.Player2}) {
+            
+            if (player.IsSprinting) {
+                player.CurrentStamina -= sessionData.GameSettings.PlayerSprintStaminaCostPerTick;
+                
+                if(player.CurrentStamina <= 0) {
+                    player.CurrentStamina = 0;
+                    player.IsSprinting = false;
+                    player.AllowedToStaminaRegen = false;
+                }
+            }
+            else {
+                if (player.TicksLeftUntilStaminaRegen == 0) {
+                    player.TicksLeftUntilStaminaRegen = sessionData.GameSettings.TicksUntilPlayerStaminaRegen;
+                    player.AllowedToStaminaRegen = true;
+                }
+
+                if (player.AllowedToStaminaRegen) {
+                    player.CurrentStamina += sessionData.GameSettings.PlayerStaminaRegenPerTick;
+                }
+        
+                if (player.CurrentStamina > sessionData.GameSettings.MaxPlayerStamina) {
+                    player.CurrentStamina = sessionData.GameSettings.MaxPlayerStamina;
+                }
+            }
+
+            if (player.CurrentStamina <= 0) {
+                player.TicksLeftUntilStaminaRegen--;
+            }
+                
+            if (player.TicksLeftUntilStaminaRegen < 0) {
+                player.TicksLeftUntilStaminaRegen = 0;
+            }
+        }
     }
     
     public void UpdateSprintState(string groupId, bool isSprinting) {
         var players = PlayGroups[groupId];
         if (players.Player1!.ConnectionId == Context.ConnectionId) {
+            if(players.Player1.KeyMask == KeyMask.None) return;
+            if (players.Player1.CurrentStamina <= 0) {
+                isSprinting = false;
+            }
             players.Player1.IsSprinting = isSprinting;
         } else {
+            if(players.Player2!.KeyMask == KeyMask.None) return;
+            if (players.Player2!.CurrentStamina <= 0) {
+                isSprinting = false;
+            }
             players.Player2!.IsSprinting = isSprinting;
         }
     }
@@ -249,7 +296,7 @@ public class GameHub : Hub{
     public async Task Shoot(string groupId) {
         var session = PlayGroups[groupId];
         var gameSettings = session.GameSettings;
-        var projectileSize = new Projectile().Size; //Todo: anders vllt in der GameSession
+        var projectileSize = session.GameSettings.ProjectileSize;
         Player shootingPlayer;
         if (session.Player1!.ConnectionId == Context.ConnectionId) {
             shootingPlayer = session.Player1;
@@ -282,14 +329,15 @@ public class GameHub : Hub{
         float projectileY = shootingPlayer.Y + additionalYPos;
 
         // Adjust the projectile's position based on player size
-        projectileX -= new Projectile().Size / 2;
-        projectileY -= new Projectile().Size / 2;
+        projectileX -= session.GameSettings.ProjectileSize / 2;
+        projectileY -= session.GameSettings.ProjectileSize / 2;
 
         var projectile = new Projectile {
             X = projectileX,
             Y = projectileY,
             Direction = shootingPlayer.LastDirection,
-            OwnerConnectionId = shootingPlayer.ConnectionId
+            OwnerConnectionId = shootingPlayer.ConnectionId,
+            Size = gameSettings.ProjectileSize
         };
 
         shootingPlayer.Projectiles.Add(projectile);

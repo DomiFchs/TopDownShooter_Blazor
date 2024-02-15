@@ -9,6 +9,10 @@ public class GameSettings {
     public float PlayerSpeed { get; set; } = 3;
     public float PlayerSprintSpeed { get; set; } = 6;
     public float PlayerSprintStaminaCostPerTick { get; set; } = 0.5f;
+    public float PlayerStaminaRegenPerTick { get; set; } = 1f;
+
+    public float ProjectileSize { get; set; } = 8;
+    public int TicksUntilPlayerStaminaRegen { get; set; } = 200;
     public float MaxPlayerStamina { get; set; } = 100;
     public float P1StartX { get; set; } = 100f;
     public float P1StartY { get; set; } = 100f;

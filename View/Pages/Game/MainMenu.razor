@@ -1,6 +1,8 @@
 @page "/mainmenu"
+@using Blazored.LocalStorage
 @inject GameConnectionProvider GameConnectionProvider
 @inject NavigationManager NavigationManager
+@inject ILocalStorageService LocalStorage
 
 <MudText Class="m-2" Typo="Typo.h4" Align="Align.Center">Topdown Shooter</MudText>
 <MudTextField @bind-Value="UserName" Label="Username" Disabled="_connecting"/>
@@ -12,10 +14,16 @@
 @code {
 
     private bool _connecting;
-    private string UserName { get; set; } = null!;
-    
+    private string? UserName { get; set; }
+
+    protected override async Task OnInitializedAsync() {
+        UserName = await LocalStorage.GetItemAsync<string>("username");
+    }
+
     private async Task Matchmaking() {
+        if (string.IsNullOrWhiteSpace(UserName)) return;
          _connecting = true;
+         await LocalStorage.SetItemAsStringAsync("username", UserName);
          GameConnectionProvider.OnGameJoined += OnGameJoined;
          await GameConnectionProvider.StartMatchmakingAsync(UserName);
     }

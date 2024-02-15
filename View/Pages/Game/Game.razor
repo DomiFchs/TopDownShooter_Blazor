@@ -43,7 +43,6 @@ else {
     private bool _gameStarted;
     
     private KeyMask _currentKeyMask;
-    private KeyMask _lastKeyMask;
     
     private CancellationTokenSource Cts { get; } = new();
     private Task? _gameLoop;
@@ -233,9 +232,6 @@ else {
                 break;
             default: return;
         }
-        
-        if (_currentKeyMask == _lastKeyMask) return; // Only send if keyMask changed to decrease network traffic
-        _lastKeyMask = _currentKeyMask;
         await GameConnectionProvider.UpdatePlayerInputServerRpc(_currentKeyMask, Cts.Token);
     }
     
