@@ -1,23 +1,97 @@
 @page "/mainmenu"
-@using Blazored.LocalStorage
 @inject GameConnectionProvider GameConnectionProvider
 @inject NavigationManager NavigationManager
 @inject ILocalStorageService LocalStorage
+@inject HighScoreService HighScoreService
 
 <MudText Class="m-2" Typo="Typo.h4" Align="Align.Center">Topdown Shooter</MudText>
 <MudTextField @bind-Value="UserName" Label="Username" Disabled="_connecting"/>
 <MudButton Disabled="_connecting" Variant="Variant.Filled" Color="Color.Primary" OnClick="Matchmaking">@(_connecting ? "Loading..." : "Play")</MudButton>
-<div class="d-flex">
-    
-</div>
+<MudGrid Justify="Justify.Center">
+    <MudItem xs="5" Class="m-3">
+        <MudCard Elevation="5" Class="p-3">
+            
+        <div class="d-flex justify-content-start">
+            <MudText Typo="Typo.h6">Running Games</MudText>
+            <MudIconButton OnClick="RefreshRunningGames" Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"/>
+        </div>
+        @if (RunningGames.Any()) {
+            <MudSimpleTable Striped="false" Style="overflow-x: auto;" Class="mt-5">
+                <colgroup>
+                    <col/>
+                    <col/>
+                </colgroup>
+                <tbody>
+                <tr>
+                    <td class="fw-bold mud-theme-primary" style="width: 25%">Player 1</td>
+                    <td class="mud-theme-primary" ></td>
+                    <td class="fw-bold mud-theme-primary" style="width: 25%">Player 2</td>
+                    <td class="mud-theme-primary" style="width: 25%"></td>
+                </tr>
+                @foreach (var session in RunningGames) {
+                    <tr>
+                        <td>@session.Player1.UserName</td>
+                        <td>vs</td>
+                        <td>@session.Player2.UserName</td>
+                        <td>
+                            <MudButton Variant="Variant.Filled" OnClick="() => SpectateGameAsync(session.GroupId)">Spectate</MudButton>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </MudSimpleTable>
+        }
+        else {
+            <MudText Typo="Typo.body1">There is no live Game!</MudText>
+        }
+        </MudCard>
+    </MudItem>
+    <MudItem xs="5" Class="m-3">
+        <MudCard Class="p-3" Elevation="5">
+        <div class="d-flex justify-content-start">
+            <MudText Typo="Typo.h6">Highscores</MudText>
+            <MudIconButton OnClick="RefreshHighScores" Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"/>
+        </div>
+        @if (HighScores.Any()) {
+            <MudSimpleTable Striped="false" Style="overflow-x: auto;" Class="mt-5">
+                <colgroup>
+                    <col/>
+                    <col/>
+                </colgroup>
+                <tbody>
+                <tr>
+                    <td class="fw-bold mud-theme-primary">Username</td>
+                    <td class="fw-bold mud-theme-primary">HighScore</td>
+                </tr>
+                @foreach (var highScore in HighScores) {
+                    <tr>
+                        <td>@highScore.PlayerName</td>
+                        <td>@highScore.Score</td>
+                    </tr>
+                }
+                </tbody>
+            </MudSimpleTable>
+        }
+        else {
+            <MudText Typo="Typo.body1">There is no Highscore Data!</MudText>
+        }
 
+        </MudCard>
+    </MudItem>
+</MudGrid>
 @code {
 
     private bool _connecting;
     private string? UserName { get; set; }
 
+    private List<HighScore> HighScores { get; set; } = [];
+    private List<SessionData> RunningGames { get; set; } = [];
+
     protected override async Task OnInitializedAsync() {
         UserName = await LocalStorage.GetItemAsync<string>("username");
+        HighScores = await HighScoreService.GetHighScoresAsync(CancellationToken.None);
+        RunningGames = await GameConnectionProvider.GetRunningGames();
+        Console.WriteLine(RunningGames.Count);
     }
 
     private async Task Matchmaking() {
@@ -30,5 +104,20 @@
 
     private void OnGameJoined() {
         NavigationManager.NavigateTo("/game");
+    }
+    
+    public async Task RefreshHighScores() {
+        HighScores = await HighScoreService.GetHighScoresAsync(CancellationToken.None);
+        await InvokeAsync(StateHasChanged);
+    }
+    
+    public async Task RefreshRunningGames() {
+        RunningGames = await GameConnectionProvider.GetRunningGames();
+        await InvokeAsync(StateHasChanged);
+    }
+    
+    public async Task SpectateGameAsync(string groupId) {
+        await GameConnectionProvider.StartSpectatingAsync(groupId);
+        NavigationManager.NavigateTo("/spectate");
     }
 }

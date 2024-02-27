@@ -1,15 +1,23 @@
+using Domain.Repositories.Implementations;
+using Domain.Repositories.Interfaces;
 using Microsoft.AspNetCore.ResponseCompression;
+using Microsoft.EntityFrameworkCore;
+using Model.Configurations;
+using Model.Entities;
+using MySqlConnector;
 using TopDownShooter.ApiService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add service defaults & Aspire components.
 builder.AddServiceDefaults();
 
-// Add services to the container.
 builder.Services.AddProblemDetails();
 builder.Services.AddSignalR();
 builder.Services.AddCors();
+
+builder.AddSqlServerDbContext<ShooterDbContext>("shooterdb");
+builder.Services.AddTransient<IHighScoreRepository, HighScoreRepository>();
+builder.Services.AddSingleton<SessionHandler>();
 
 builder.Services.AddResponseCompression(opts =>
 {
@@ -17,36 +25,43 @@ builder.Services.AddResponseCompression(opts =>
         new[] { "application/octet-stream" });
 });
 
+
+
+
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 app.UseExceptionHandler();
-
-var summaries = new[] {
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
 
 app.UseResponseCompression();
 app.UseRouting();
+
+app.MapGet("/highscores", async (ShooterDbContext context) =>
+    Results.Ok((object?)await context.HighScores.ToListAsync()));
+
 app.MapHub<ChatHub>("/chathub");
 app.MapHub<MatchmakingHub>("/matchmakinghub");
 app.MapHub<GameHub>("/gamehub");
+
+
+
 app.UseCors(b => b.AllowAnyOrigin()
     .AllowAnyHeader()
     .AllowAnyMethod()
 );
 
-app.MapGet("/weatherforecast", () => {
-    var forecast = Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast(DateOnly.FromDateTime(DateTime.Now.AddDays(index)), Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)])).ToArray();
-    return forecast;
-});
-
 app.MapDefaultEndpoints();
 
-app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary) {
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
+if (app.Environment.IsDevelopment()) {
+    using var scope = app.Services.CreateScope();
+    var context = scope.ServiceProvider.GetRequiredService<ShooterDbContext>();
+    await context.Database.EnsureCreatedAsync();
 }
+else
+{
+    app.UseExceptionHandler("/Error", createScopeForErrors: true);
+    // The default HSTS value is 30 days.
+    // You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
+    app.UseHsts();
+}
+
+app.Run();

@@ -1,73 +1,88 @@
-using System.Numerics;
+using System.Data.Common;
+using Domain.Repositories.Interfaces;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
+using Model.Configurations;
+using Model.Entities;
+using MySqlConnector;
 using Shared.Entities;
-using TopDownShooter.ApiService.Entities;
-using System.Timers;
-using Timer = System.Timers.Timer;
 
 namespace TopDownShooter.ApiService.Services;
 
-public class GameHub : Hub{
+public class GameHub(IHighScoreRepository highScoreRepository, SessionHandler sessionHandler) : Hub {
     
-    
-    private static readonly Dictionary<string, SessionData> PlayGroups = new();
-    
+    private static SemaphoreSlim _semaphore = new(1, 1);
+
     public async Task JoinGame(string groupId, string userName) {
-        Console.WriteLine($"Player {userName} trying to join game {groupId}!");
+        await _semaphore.WaitAsync();
         var player = new Player { UserName = userName, ConnectionId = Context.ConnectionId, GroupId = groupId, Connected = true};
-        Console.WriteLine($"Player created! Adding to group {groupId}!");
+        Console.WriteLine($"Player {userName} created! Adding to group {groupId}!");
         await Groups.AddToGroupAsync(Context.ConnectionId, groupId);
         
-        if (!PlayGroups.TryGetValue(groupId, out var value)) {
-            var sessionData = new SessionData() { Player1 = player, GameSettings = new GameSettings() };
-            player.CurrentHealth = sessionData.GameSettings.MaxPlayerHealth;
-            player.CurrentStamina = sessionData.GameSettings.MaxPlayerStamina;
+        var success = sessionHandler.TryAdd(groupId, new SessionData { Player1 = player, GameSettings = new GameSettings(), GroupId = groupId});
+        var sessionData = sessionHandler.Get(groupId);
+        if (success) {
+            sessionData.Player1!.CurrentHealth = sessionData.GameSettings.MaxPlayerHealth;
+            sessionData.Player1!.CurrentStamina = sessionData.GameSettings.MaxPlayerStamina;
             
-            player.X = sessionData.GameSettings.P1StartX;
-            player.Y = sessionData.GameSettings.P1StartY;
-            
-            PlayGroups.Add(groupId, sessionData);
+            sessionData.Player1!.X = sessionData.GameSettings.P1StartX;
+            sessionData.Player1!.Y = sessionData.GameSettings.P1StartY;
+            Console.WriteLine(sessionHandler.Count());
+            Console.WriteLine("Game created!");
             
         } else {
-            if (value.Player2 == null) {
-                value.Player2  = player;
+            if (sessionData.Player2 == null) {
+                sessionData.Player2 = player;
                 
-                player.CurrentHealth = value.GameSettings.MaxPlayerHealth;
-                player.CurrentStamina = value.GameSettings.MaxPlayerStamina;
+                sessionData.Player2.CurrentHealth = sessionData.GameSettings.MaxPlayerHealth;
+                sessionData.Player2.CurrentStamina = sessionData.GameSettings.MaxPlayerStamina;
                 
-                player.X = value.GameSettings.P2StartX;
-                player.Y = value.GameSettings.P2StartY;
+                sessionData.Player2.X = sessionData.GameSettings.P2StartX;
+                sessionData.Player2.Y = sessionData.GameSettings.P2StartY;
                 
-                await Clients.Group(groupId).SendAsync("GameJoined", value.GameSettings);
+                await Clients.Group(groupId).SendAsync("GameJoined", sessionData.GameSettings);
+                Console.WriteLine("Game joined!");
             }
         }
+
+        _semaphore.Release();
     }
     
-    public async Task RequestGameData() {
+    public async Task RequestGameData(string? groupId) {
         Console.WriteLine("Game data Requested!");
-        var groupId = PlayGroups.First(g => g.Value.Player1!.ConnectionId == Context.ConnectionId || g.Value.Player2!.ConnectionId == Context.ConnectionId).Key;
+
+        if (groupId is null) {
+            groupId = sessionHandler.First(g => g.Value.Player1!.ConnectionId == Context.ConnectionId || g.Value.Player2!.ConnectionId == Context.ConnectionId).Key;
+        }
         
-        var players = PlayGroups[groupId];
-        if (players.Player1!.ConnectionId == Context.ConnectionId) {
-            await Clients.Caller.SendAsync("PlayersInitialized", players.Player1, players.Player2);
+        var sessionData = sessionHandler.Get(groupId);
+        if (sessionData.Player1!.ConnectionId == Context.ConnectionId) {
+            await Clients.Caller.SendAsync("PlayersInitialized", sessionData.Player1, sessionData.Player2, sessionData);
             return;
         }
 
-        await Clients.Caller.SendAsync("PlayersInitialized", players.Player2, players.Player1);
+        await Clients.Caller.SendAsync("PlayersInitialized", sessionData.Player2, sessionData.Player1, sessionData);
+    }
+    
+    public async Task SpectateGame(string groupId) {
+        await Groups.AddToGroupAsync(Context.ConnectionId, groupId);
+        var sessionData = sessionHandler.Get(groupId);
+        sessionData.SpectatorCount++;
+        await Clients.Caller.SendAsync("PlayersInitialized", sessionData.Player1, sessionData.Player2);
+        await Clients.Caller.SendAsync("SpectatorGameJoined", sessionData.GameSettings, sessionData);
     }
     
     public async Task ChangeReadyState(bool ready, string groupId) {
-        Console.WriteLine("Player is ready!");
-        Console.WriteLine(groupId);
-        var players = PlayGroups[groupId];
-        if (players.Player1!.ConnectionId == Context.ConnectionId) {
-            players.Player1.Ready = ready;
+        var sessionData = sessionHandler.Get(groupId);
+        if (sessionData.Player1!.ConnectionId == Context.ConnectionId) {
+            sessionData.Player1.Ready = ready;
         } else {
-            players.Player2!.Ready = ready;
+            sessionData.Player2!.Ready = ready;
         }
         
-        if (players.Player1.Ready && players.Player2!.Ready) {
+        if (sessionData.Player1.Ready && sessionData.Player2!.Ready) {
             Console.WriteLine("Game starting!");
+            sessionData.GameStarted = true;
             await Clients.Group(groupId).SendAsync("StartGame");
             
         }
@@ -76,7 +91,7 @@ public class GameHub : Hub{
     
     public async Task UpdatePlayers(string groupId)
     {
-        var sessionData = PlayGroups[groupId];
+        var sessionData = sessionHandler.Get(groupId);
         MovePlayer(sessionData.Player1);
         MovePlayer(sessionData.Player2);
         await MoveProjectiles(sessionData.Player1, groupId);
@@ -89,10 +104,10 @@ public class GameHub : Hub{
         UpdatePlayerStamina(sessionData);
         
         if(sessionData.Player1.ConnectionId == Context.ConnectionId) {
-            await Clients.Group(groupId).SendAsync("UpdateGameData", sessionData.Player1, sessionData.Player2, allProjectiles);
+            await Clients.Group(groupId).SendAsync("UpdateGameData", sessionData.Player1, sessionData.Player2, allProjectiles, sessionData);
         }
         else {
-            await Clients.Group(groupId).SendAsync("UpdateGameData", sessionData.Player2, sessionData.Player1, allProjectiles);
+            await Clients.Group(groupId).SendAsync("UpdateGameData", sessionData.Player2, sessionData.Player1, allProjectiles, sessionData);
         }
         
     }
@@ -136,28 +151,28 @@ public class GameHub : Hub{
     }
     
     public void UpdateSprintState(string groupId, bool isSprinting) {
-        var players = PlayGroups[groupId];
-        if (players.Player1!.ConnectionId == Context.ConnectionId) {
-            if(players.Player1.KeyMask == KeyMask.None) return;
-            if (players.Player1.CurrentStamina <= 0) {
+        var sessionData = sessionHandler.Get(groupId);
+        if (sessionData.Player1!.ConnectionId == Context.ConnectionId) {
+            if(sessionData.Player1.KeyMask == KeyMask.None) return;
+            if (sessionData.Player1.CurrentStamina <= 0) {
                 isSprinting = false;
             }
-            players.Player1.IsSprinting = isSprinting;
+            sessionData.Player1.IsSprinting = isSprinting;
         } else {
-            if(players.Player2!.KeyMask == KeyMask.None) return;
-            if (players.Player2!.CurrentStamina <= 0) {
+            if(sessionData.Player2!.KeyMask == KeyMask.None) return;
+            if (sessionData.Player2!.CurrentStamina <= 0) {
                 isSprinting = false;
             }
-            players.Player2!.IsSprinting = isSprinting;
+            sessionData.Player2!.IsSprinting = isSprinting;
         }
     }
     
     public void UpdatePlayerInput(string groupId, KeyMask keyFlag) {
-        var players = PlayGroups[groupId];
-        if (players.Player1!.ConnectionId == Context.ConnectionId) {
-            players.Player1.KeyMask = keyFlag;
+        var sessionData = sessionHandler.Get(groupId);
+        if (sessionData.Player1!.ConnectionId == Context.ConnectionId) {
+            sessionData.Player1.KeyMask = keyFlag;
         } else {
-            players.Player2!.KeyMask = keyFlag;
+            sessionData.Player2!.KeyMask = keyFlag;
         }
     }
     
@@ -165,7 +180,7 @@ public class GameHub : Hub{
         if (player == null) return;
         
         
-        var gameSession = PlayGroups[player.GroupId!];
+        var gameSession = sessionHandler.Get(player.GroupId!);
         var gameSettings = gameSession.GameSettings;
         
         var otherPlayer = player == gameSession.Player1 ? gameSession.Player2 : gameSession.Player1;
@@ -218,7 +233,7 @@ public class GameHub : Hub{
     }
 
     private bool IsColliding(Player player1, Player player2) {
-        var gameSettings = PlayGroups[player1.GroupId!].GameSettings;
+        var gameSettings = sessionHandler.Get(player1.GroupId!).GameSettings;
         
         return (player1.X < player2.X + gameSettings.PlayerWidth &&
                 player1.X + gameSettings.PlayerWidth > player2.X &&
@@ -229,7 +244,7 @@ public class GameHub : Hub{
     private bool IsColliding(Player player, Projectile projectile)
     {
         if (player.ConnectionId == projectile.OwnerConnectionId) return false;
-        var gameSettings = PlayGroups[player.GroupId!].GameSettings;
+        var gameSettings = sessionHandler.Get(player.GroupId!).GameSettings;
         return (player.X < projectile.X + projectile.Size &&
                 player.X + gameSettings.PlayerWidth > projectile.X &&
                 player.Y < projectile.Y + projectile.Size &&
@@ -237,7 +252,7 @@ public class GameHub : Hub{
     }
     
     private async Task MoveProjectiles(Player player, string groupId) {
-        var gameSettings = PlayGroups[groupId].GameSettings;
+        var gameSettings = sessionHandler.Get(groupId).GameSettings;
         
         foreach (var projectile in player.Projectiles) {
             if (projectile.Direction.HasFlag(KeyMask.Up)) {
@@ -265,7 +280,7 @@ public class GameHub : Hub{
             player.Projectiles.Remove(projectileToRemove);
         }
         
-        var gameSession = PlayGroups[groupId];
+        var gameSession = sessionHandler.Get(groupId);
         await CheckProjectileCollisions(groupId,gameSession.Player1, player.Projectiles);
         await CheckProjectileCollisions(groupId, gameSession.Player2, player.Projectiles);
     }
@@ -294,7 +309,7 @@ public class GameHub : Hub{
     }
     
     public async Task Shoot(string groupId) {
-        var session = PlayGroups[groupId];
+        var session = sessionHandler.Get(groupId);
         var gameSettings = session.GameSettings;
         var projectileSize = session.GameSettings.ProjectileSize;
         Player shootingPlayer;
@@ -346,15 +361,20 @@ public class GameHub : Hub{
 
     
     public async Task GameOver(string groupId) {
-        var session = PlayGroups[groupId];
+        var session = sessionHandler.Get(groupId);
         
         var winner = session.Player1.IsDead ? session.Player2 : session.Player1;
         
+        await highScoreRepository.TryCreateHighScoreAsync(winner.UserName, CancellationToken.None);
         await Clients.Group(groupId).SendAsync("GameOver", winner);
     }
     
-    public async Task Disconnect(string groupId) {
-        var session = PlayGroups[groupId];
+    public async Task Disconnect(string groupId, bool asSpectator) {
+        var session = sessionHandler.Get(groupId);
+        if (asSpectator) {
+            session.SpectatorCount--;
+            return;
+        }
         if (session.Player1!.ConnectionId == Context.ConnectionId) {
             session.Player1.Connected = false;
         } else {
@@ -362,7 +382,7 @@ public class GameHub : Hub{
         }
         
         if (!session.Player1.Connected && !session.Player2!.Connected) {
-            PlayGroups.Remove(groupId);
+            sessionHandler.Remove(groupId);
         }
     }
     

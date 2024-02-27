@@ -2,11 +2,14 @@
 
 @inject GameConnectionProvider GameConnectionProvider
 @inject IDialogService DialogService
+@inject NavigationManager NavigationManager
 @implements IAsyncDisposable
 
 <MudButton FullWidth="true" Disabled="_pressedReady" Color="Color.Primary" Variant="Variant.Filled" OnClick="SetReady">Ready</MudButton>
 @if (_gameStarted) {
     
+    @if (GameConnectionProvider.GameSettings is not null) {
+        
     <MudAlert Severity="@(_focussed ? Severity.Info : Severity.Warning)">@(_focussed ? "Press WASD to Move and Enter to shoot!" : "Focus the Canvas to Play!")</MudAlert>
     <div class="d-flex justify-content-center">
         <div @onfocusin="() => SetFocus(true)" @onfocusout="() => SetFocus(false)" tabindex="0" @onkeydown="OnKeyDown" @onkeyup="OnKeyUp" @onkeypress="OnKeyPress">
@@ -14,12 +17,16 @@
         </div>
     </div>
     
-    @if (GameConnectionProvider.Owner is not null && GameConnectionProvider.Enemy is not null) {
+    }
+    @if (GameConnectionProvider.Owner is not null && GameConnectionProvider.Enemy is not null && GameConnectionProvider.CurrentSession is not null){
         <div class="d-flex justify-content-around">
             <div style="width: 20vw">
                 <MudText>@GameConnectionProvider.Owner.UserName (You)</MudText>
                 <MudProgressLinear Color="Color.Error" Rounded="true" Size="Size.Large" Value="@GameConnectionProvider.Owner.CurrentHealth" Max="@GameConnectionProvider.GameSettings.MaxPlayerHealth"/>
                 <MudProgressLinear Color="Color.Warning" Rounded="true" Size="Size.Large" Value="@GameConnectionProvider.Owner.CurrentStamina" Max="@GameConnectionProvider.GameSettings.MaxPlayerStamina"/>
+            </div>
+            <div>
+                <MudButton Disabled="true" Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.RemoveRedEye">@GameConnectionProvider.CurrentSession.SpectatorCount</MudButton>
             </div>
             <div style="width: 20vw">
                 <MudText>@GameConnectionProvider.Enemy.UserName</MudText>

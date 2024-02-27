@@ -1,0 +1,194 @@
+@page "/spectate"
+
+@inject GameConnectionProvider GameConnectionProvider
+@inject IDialogService DialogService
+@inject NavigationManager NavigationManager
+@implements IAsyncDisposable
+
+<MudButton Variant="Variant.Filled" FullWidth="true" OnClick="Disconnect">Leave</MudButton>
+
+<div class="d-flex justify-content-center">
+    <div >
+        <BECanvas Width="800" Height="800" @ref="_canvasReference"/>
+    </div>
+</div>
+
+@if (GameConnectionProvider.Owner is not null && GameConnectionProvider.Enemy is not null) {
+        <div class="d-flex justify-content-around">
+        <div style="width: 20vw">
+            <MudText>@GameConnectionProvider.Owner.UserName (You)</MudText>
+            <MudProgressLinear Color="Color.Error" Rounded="true" Size="Size.Large" Value="@GameConnectionProvider.Owner.CurrentHealth" Max="@GameConnectionProvider.GameSettings.MaxPlayerHealth"/>
+            <MudProgressLinear Color="Color.Warning" Rounded="true" Size="Size.Large" Value="@GameConnectionProvider.Owner.CurrentStamina" Max="@GameConnectionProvider.GameSettings.MaxPlayerStamina"/>
+        </div>
+        <div>
+            <MudButton Disabled="true" Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.RemoveRedEye">@GameConnectionProvider.CurrentSession.SpectatorCount</MudButton>
+        </div>
+            <div style="width: 20vw">
+                <MudText>@GameConnectionProvider.Enemy.UserName</MudText>
+                <MudProgressLinear Color="Color.Error" Rounded="true" Size="Size.Large" Value="@GameConnectionProvider.Enemy.CurrentHealth" Max="@GameConnectionProvider.GameSettings.MaxPlayerHealth"/>
+                <MudProgressLinear Color="Color.Warning" Rounded="true" Size="Size.Large" Value="@GameConnectionProvider.Enemy.CurrentStamina" Max="@GameConnectionProvider.GameSettings.MaxPlayerStamina"/>
+            </div>
+        </div>
+    }
+
+@code {
+    private Canvas2DContext _canvasContext = null!;
+    private BECanvasComponent _canvasReference = null!;
+
+    public CancellationTokenSource Cts { get; set; } = new();
+
+    private Task? _gameLoop;
+
+    protected override async Task OnInitializedAsync() {
+        await GameConnectionProvider.FetchInitialSpectatorDataServerRpc();
+        GameConnectionProvider.OnPlayersInitialized += OnGameStarted;
+        GameConnectionProvider.OnGameDataUpdated += RenderCanvasAsync;
+        GameConnectionProvider.OnGameEnded += OnGameEnded;
+    }
+    
+    private async Task OnGameStarted(Player p1, Player p2) {
+        _gameLoop = Task.Run(async () => await GameLoop(Cts.Token));
+        await RenderCanvasAsync(p1, p2);
+        await InvokeAsync(StateHasChanged);
+    }
+    
+    private async Task OnGameEnded(Player player) {
+        var parameters = new DialogParameters<GameOverDialog> {
+            { "Winner", player },
+            { "OnLeave", GameConnectionProvider.DisconnectAsSpectatorServerRpc(Cts.Token) }
+        };
+        await DialogService.ShowAsync<GameOverDialog>("Game Ended!", parameters , new DialogOptions() { MaxWidth = MaxWidth.Large, FullWidth = true, CloseOnEscapeKey = false, DisableBackdropClick = true});
+    }
+
+    private async Task RenderCanvasAsync(Player localPlayer, Player enemy, List<Projectile>? projectiles = null) {
+        if (_canvasReference == null) {
+            Console.WriteLine("Canvas reference is null");
+            return;
+        }
+
+        Console.WriteLine("Rendering canvas");
+        _canvasContext = await _canvasReference.CreateCanvas2DAsync();
+        await _canvasContext.SetFillStyleAsync("green");
+        await _canvasContext.FillRectAsync(0, 0, GameConnectionProvider.GameSettings.FieldWidth, GameConnectionProvider.GameSettings.FieldHeight);
+        await RenderPlayerWithWeapon(localPlayer);
+        await RenderPlayerWithWeapon(enemy);
+
+        await _canvasContext.SetFillStyleAsync("black");
+
+        if (projectiles == null) {
+            await InvokeAsync(StateHasChanged);
+            StateHasChanged();
+            return;
+        }
+        
+        foreach (var projectile in projectiles) {
+            await _canvasContext.FillRectAsync(projectile.X, projectile.Y, projectile.Size, projectile.Size);
+        }
+        
+        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task RenderPlayerWithWeapon(Player player) {
+        await _canvasContext.SetFillStyleAsync("black");
+        await _canvasContext.FillRectAsync(player.X, player.Y, GameConnectionProvider.GameSettings.PlayerWidth, GameConnectionProvider.GameSettings.PlayerHeight);
+        await _canvasContext.SetFillStyleAsync("gray");
+        await DrawWeapon(player);
+    }
+
+    private async Task DrawWeapon(Player player) {
+        var weaponSizeX = 30;
+        var weaponSizeY = 10;
+
+        var weaponX = player.X;
+        var weaponY = player.Y;
+
+        var direction = player.LastDirection;
+
+        if (direction == KeyMask.Up) {
+            (weaponSizeX, weaponSizeY) = (weaponSizeY, weaponSizeX);
+            weaponY -= weaponSizeY;
+            await _canvasContext.FillRectAsync(weaponX, weaponY, weaponSizeX, weaponSizeY);
+            return;
+        }
+
+        if (direction == KeyMask.Down) {
+            (weaponSizeX, weaponSizeY) = (weaponSizeY, weaponSizeX);
+            weaponY += GameConnectionProvider.GameSettings.PlayerHeight;
+            await _canvasContext.FillRectAsync(weaponX, weaponY, weaponSizeX, weaponSizeY);
+            return;
+        }
+
+        if (direction == KeyMask.Left) {
+            weaponX -= weaponSizeX;
+            await _canvasContext.FillRectAsync(weaponX, weaponY, weaponSizeX, weaponSizeY);
+            return;
+        }
+
+        if (direction == KeyMask.Right) {
+            weaponX += GameConnectionProvider.GameSettings.PlayerWidth;
+            await _canvasContext.FillRectAsync(weaponX, weaponY, weaponSizeX, weaponSizeY);
+            return;
+        }
+
+        if (direction == (KeyMask.Up | KeyMask.Left)) {
+            await DrawDiagonalWeapon(weaponX, weaponY - weaponSizeY, -1, -1, weaponSizeX, weaponSizeY);
+            return;
+        }
+
+        if (direction == (KeyMask.Up | KeyMask.Right)) {
+            await DrawDiagonalWeapon(weaponX + GameConnectionProvider.GameSettings.PlayerWidth, weaponY - weaponSizeY, 1, -1, weaponSizeX, weaponSizeY);
+            return;
+        }
+
+        if (direction == (KeyMask.Down | KeyMask.Left)) {
+            await DrawDiagonalWeapon(weaponX - weaponSizeX, weaponY + GameConnectionProvider.GameSettings.PlayerHeight, -1, 1, weaponSizeX, weaponSizeY);
+            return;
+        }
+
+        if (direction == (KeyMask.Down | KeyMask.Right)) {
+            await DrawDiagonalWeapon(weaponX + GameConnectionProvider.GameSettings.PlayerWidth, weaponY + GameConnectionProvider.GameSettings.PlayerHeight, 1, 1, weaponSizeX, weaponSizeY);
+        }
+    }
+    
+    private async Task DrawDiagonalWeapon(float x, float y, int xDirection, int yDirection, int weaponSizeX, int weaponSizeY) {
+        var weaponPartsCount = 2;
+        var weaponPartSize = weaponSizeX / 3;
+        var weaponPartX = x - xDirection * weaponPartSize + weaponPartSize; // Adjusted initial X position
+        var weaponPartY = y - yDirection * weaponPartSize + weaponPartSize; // Adjusted initial Y position
+
+        switch (xDirection) {
+            case -1 when yDirection == -1:
+                weaponPartX -= weaponPartSize*3;
+                weaponPartY -= weaponPartSize*2;
+                break;
+            case 1 when yDirection == -1:
+                weaponPartY -= weaponPartSize*2;
+                break;
+        }
+
+        for (var i = 0; i < weaponPartsCount; i++) {
+            await _canvasContext.FillRectAsync(weaponPartX, weaponPartY, weaponPartSize, weaponSizeY);
+            weaponPartX += xDirection * weaponPartSize;
+            weaponPartY += yDirection * weaponSizeY;
+        }
+    }
+    
+    private async Task GameLoop(CancellationToken ct) {
+        while (!ct.IsCancellationRequested) {
+            await GameConnectionProvider.UpdateGameDataServerRpc(ct);
+            await Task.Delay(10, ct);
+        }
+    }
+
+    public async ValueTask DisposeAsync() {
+        _canvasContext.Dispose();
+        if (GameConnectionProvider != null) await GameConnectionProvider.DisposeAsync();
+    }
+
+    private async Task Disconnect() {
+        await GameConnectionProvider.DisconnectAsSpectatorServerRpc();
+        NavigationManager.NavigateTo("/mainmenu");
+    }
+
+}

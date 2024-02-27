@@ -1,10 +1,9 @@
 using Microsoft.AspNetCore.SignalR;
 using Shared.Entities;
-using TopDownShooter.ApiService.Entities;
 
 namespace TopDownShooter.ApiService.Services;
 
-public class MatchmakingHub : Hub {
+public class MatchmakingHub(SessionHandler sessionHandler) : Hub {
     
     private static List<Player> Players { get; } = [];
     public async Task TryConnect() {
@@ -35,6 +34,10 @@ public class MatchmakingHub : Hub {
             }
         }
         Players.Add(player);
+    }
+
+    public List<SessionData> GetRunningGames() {
+        return sessionHandler.GetAllRunning();
     }
     
 }

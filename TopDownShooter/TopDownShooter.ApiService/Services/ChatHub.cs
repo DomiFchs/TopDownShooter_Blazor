@@ -1,6 +1,3 @@
-
-
-
 using Microsoft.AspNetCore.SignalR;
 
 namespace TopDownShooter.ApiService.Services;

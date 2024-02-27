@@ -1,7 +1,14 @@
-var builder = DistributedApplication.CreateBuilder(args);
+/*var builder = DistributedApplication.CreateBuilder(args);
 
-var apiService = builder.AddProject<Projects.TopDownShooter_ApiService>("apiservice");
+
+var shooterdb = builder.AddSqlServerContainer("shootersql", "dominik05!")
+    .WithVolumeMount("shooterdata", "/var/opt/mssql/data", VolumeMountType.Named)
+    .AddDatabase("shooterdb");
+
+
+var apiService = builder.AddProject<Projects.TopDownShooter_ApiService>("apiservice")
+    .WithReference(shooterdb);
 
 builder.AddProject<Projects.View>("webfrontend").WithReference(apiService);
 
-builder.Build().Run();
+builder.Build().Run();*/

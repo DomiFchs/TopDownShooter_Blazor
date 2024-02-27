@@ -1,22 +1,21 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Blazored.LocalStorage;
+using Domain.Repositories.Implementations;
+using Domain.Repositories.Interfaces;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using View;
 using MudBlazor.Services;
+using MySqlConnector;
 using View.Entities;
 using View.Services;
 
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
+
 builder.RootComponents.Add<App>("#app");
 builder.RootComponents.Add<HeadOutlet>("head::after");
 builder.Services.AddMudServices();
-
-builder.Services.Configure<HubConfig>(cfg => {
-    cfg.GameHubHost = new Uri(builder.Configuration["GameHost"]!);
-    cfg.MatchmakingHubHost = new Uri(builder.Configuration["MatchmakingHost"]!);
-});
 
 builder.Services.AddBlazoredLocalStorage(config =>
 {
@@ -29,7 +28,14 @@ builder.Services.AddBlazoredLocalStorage(config =>
     config.JsonSerializerOptions.WriteIndented = false;
 });
 
+builder.Services.Configure<HubConfig>(cfg => {
+    cfg.GameHubHost = new Uri(builder.Configuration["GameHost"]!);
+    cfg.MatchmakingHubHost = new Uri(builder.Configuration["MatchmakingHost"]!);
+});
+
+builder.Services.AddHttpClient<HighScoreService>("HighScoreClient",client => client.BaseAddress = new Uri(builder.Configuration["HighScoreAPI"]!));
 
 builder.Services.AddScoped<GameConnectionProvider>();
+builder.Services.AddScoped<HighScoreService>();
 builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri(builder.HostEnvironment.BaseAddress) });
 await builder.Build().RunAsync();
